@@ -5,16 +5,21 @@
 
 // We need to define our own panic handler
 use core::panic::PanicInfo;
+use embedded_hal::digital::v2::InputPin;
 
+use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::{image::Image, pixelcolor::Rgb565, prelude::*};
 use tinybmp::Bmp;
+use display_interface_spi::SPIInterface;
+
+use st7789::ST7789;
 
 // peripheral access crate
 //use rp_pico::hal::{self, pac};
 
 use embedded_hal::spi::MODE_0;
 use fugit::RateExtU32;
-use rp2040_hal::{spi::Spi, pac, gpio::Pins, sio::Sio};
+use rp2040_hal::{gpio::Pins, pac, sio::Sio, spi::Spi};
 
 use rp_pico::{
     self,
@@ -22,10 +27,7 @@ use rp_pico::{
 };
 
 use embedded_graphics::{
-    mono_font::{
-        ascii::{FONT_10X20},
-        MonoTextStyle,
-    },
+    mono_font::{ascii::FONT_10X20, MonoTextStyle},
     text::Text,
 };
 
@@ -41,7 +43,7 @@ fn main() -> ! {
     // take the peripherals
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
-    
+
     // Watchdog is a HW timer that counts down, and if it
     // reaches 0, restarts the program. We use this as a timer
     // when creating our clock.
@@ -62,7 +64,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
     // create the delay
-    let delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().raw());
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().raw());
 
     // get access to the GPIO pins
     let sio = Sio::new(pac.SIO);
@@ -78,25 +80,59 @@ fn main() -> ! {
     // miso is rx; recv data from client. since its a display, it never sends data
     let _ = pins.gpio4.into_mode::<rp2040_hal::gpio::FunctionSpi>();
 
-    let spi = Spi::<_, _, 8>::new(pac.SPI0).init(&mut pac.RESETS, RateExtU32::Hz(125_000_000u32), RateExtU32::Hz(125_000_000u32), &MODE_0);
+    let spi = Spi::<_, _, 8>::new(pac.SPI0).init(
+        &mut pac.RESETS,
+        RateExtU32::Hz(525_000_000u32),
+        RateExtU32::Hz(525_000_000u32),
+        &MODE_0,
+    );
     let dc = pins.gpio6.into_push_pull_output();
     let cs = pins.gpio5.into_push_pull_output();
     let reset = pins.gpio16.into_push_pull_output();
+    let button_pin = pins.gpio17.into_pull_down_input();
+    let idk_pin = pins.gpio27.into_push_pull_output();
 
-    let mut display = LCD2InchDisplay::new(spi, dc, cs, reset, delay).unwrap();
+    //let mut display = LCD2InchDisplay::new(spi, dc, cs, reset, delay).unwrap();
+    let mut spi = SPIInterface::new(spi, dc, cs);
+    let mut display = ST7789::new(spi, Some(reset), Some(idk_pin), 240,320);
+    display.init(&mut delay).unwrap();
 
     let bmp_data = include_bytes!("../image.bmp");
     let bmp: Bmp<Rgb565> = Bmp::from_slice(bmp_data).unwrap();
     let image = Image::new(&bmp, Point::new(0, 0));
     image.draw(&mut display).unwrap();
     Text::new(
-        "Hello World!\n  - default style 5x8",
+        "Tacos are good",
         Point::new(15, 15),
         MonoTextStyle::new(&FONT_10X20, Rgb565::new(0xFF, 0xFF, 0xFF)),
     )
-    .draw(&mut display).unwrap();
+    .draw(&mut display)
+    .unwrap();
+
+    Rectangle::new(Point::new(16, 24), Size::new(200, 200))
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_width(2)
+                .stroke_color(Rgb565::RED)
+                .fill_color(Rgb565::CYAN)
+                .build(),
+        )
+        .draw(&mut display)
+        .unwrap();
+
+    let mut second_message = false;
 
     loop {
+        if button_pin.is_high().unwrap() && !second_message {
+            Text::new(
+                "Do you like tacos?",
+                Point::new(15, 200),
+                MonoTextStyle::new(&FONT_10X20, Rgb565::new(0xFF, 0xFF, 0xFF)),
+            )
+            .draw(&mut display)
+            .unwrap();
+            second_message = true;
+        }
     }
 }
 
